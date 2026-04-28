@@ -1,0 +1,30 @@
+# XSSCAN 配置文件
+# 注意: config.yaml 目前作为预留配置使用
+#       CLI 参数优先级高于此文件
+
+# 扫描行为配置
+timeout: 10          # 请求超时时间（秒）
+threads: 10           # 并发线程数
+follow_redirect: true  # 自动跟随重定向
+verify_ssl: false      # 跳过 SSL 证书验证
+
+# HTTP 请求头
+user_agent: "Mozilla/5.0 (compatible; XSSCAN/1.0; Linux) AppleWebKit/537.36"
+
+# 扫描模块开关 (true = 启用, false = 禁用)
+modules:
+  nacos: true
+  xxljob: true
+  springboot: true
+  druid: true
+  grafana: true
+  redis: true
+  jenkins: true
+  elasticsearch: true
+  rabbitmq: true
+  apollo: true
+
+# 自定义 Headers（可选）
+# headers:
+#   Authorization: "Bearer xxxx"
+#   X-Api-Key: "your-api-key"
