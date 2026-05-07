@@ -145,7 +145,27 @@ def detect_scheme_quick(host, port, timeout=10):
     return "http"
 
 
+def cleanup_old_outputs(output_dir="output", days=3):
+    """清理超过指定天数的旧报告文件"""
+    import time
+    cutoff = time.time() - days * 86400
+    removed = []
+    for fname in os.listdir(output_dir):
+        fpath = os.path.join(output_dir, fname)
+        if os.path.isfile(fpath) and not fname.startswith("."):
+            if os.path.getmtime(fpath) < cutoff:
+                os.remove(fpath)
+                removed.append(fname)
+    return removed
+
+
 def main():
+    # 启动时自动清理 3 天前的旧报告
+    if os.path.isdir("output"):
+        cleaned = cleanup_old_outputs()
+        if cleaned:
+            print(f"[清理] 已删除 {len(cleaned)} 个过期报告文件: {', '.join(cleaned)}")
+
     parser = argparse.ArgumentParser(
         description="XSSCAN — 面向公网入口的暴露面扫描工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
