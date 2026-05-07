@@ -9,6 +9,7 @@ Linux only tool for scanning exposed middleware on public endpoints
 import sys
 import os
 import argparse
+import datetime
 
 try:
     from colorama import init as colorama_init
@@ -20,6 +21,7 @@ from lib.detector import Detector
 from lib.reporter import Reporter
 from lib.http_client import HttpClient
 from lib.port_scanner import PortScanner, resolve_target_full
+from lib.notifier import WeChatNotifier
 
 
 BANNER = """
@@ -155,6 +157,8 @@ def main():
   %(prog)s -f targets.txt --port-only           仅做端口扫描，不做漏洞检测
   %(prog)s -u 1.2.3.4 --full-scan               全端口扫描（~700个端口）输出资产清单+收敛建议
   %(prog)s -u 1.2.3.4 --full-scan -o report.html --format html  生成 HTML 报告
+  %(prog)s -u 1.2.3.4 --notify                           扫描完成后推送结果到企微机器人
+  %(prog)s -u 1.2.3.4 --notify --webhook "https://..."   使用指定 Webhook 推送
   %(prog)s --list                               列出所有可用模块
 
 支持的模块: {' | '.join(AVAILABLE_MODULES.keys())}
@@ -201,6 +205,14 @@ def main():
     parser.add_argument(
         "--no-color", action="store_true",
         help="禁用彩色输出"
+    )
+    parser.add_argument(
+        "--webhook", default=None,
+        help="企微机器人 Webhook 地址（支持直接传入 key=xxx 或完整 URL）"
+    )
+    parser.add_argument(
+        "--notify", action="store_true",
+        help="扫描完成后推送结果到企微机器人 Webhook"
     )
 
     args = parser.parse_args()
@@ -278,8 +290,23 @@ def main():
             print(f"[统计] 共 {reporter_port.total_open_ports()} 个开放端口 | 🔴高危 {high_risk} | 🟡中危 {medium_risk}")
             if high_risk > 0:
                 print(f"[警告] 高危端口数量 > 0，请尽快按收敛建议整改！")
+            # ── 企微通知 ───────────────────────────────────────────────────
+            if args.notify:
+                notifier = WeChatNotifier(args.webhook)
+                ok, msg = notifier.notify_scan_complete(
+                    results=[],
+                    port_inventory=reporter_port.port_inventory,
+                    target=raw
+                )
+                print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         else:
             print("\n[结束] 未发现任何开放端口\n")
+            if args.notify:
+                notifier = WeChatNotifier(args.webhook)
+                ok, msg = notifier.send_markdown(
+                    f"## 🛡️ XSSCAN 扫描完成\n\n**目标**: `{raw}`\n\n> 未发现任何开放端口。"
+                )
+                print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         sys.exit(0)
 
     # ── 中间件端口扫描 + 协议检测 ──────────────────────────────────────
@@ -326,6 +353,15 @@ def main():
         os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else "output", exist_ok=True)
         reporter_port.save(output_file, args.format)
         print(f"\n[完成] 端口扫描结果已保存: {output_file}\n")
+        # ── 企微通知 ───────────────────────────────────────────────────
+        if args.notify:
+            notifier = WeChatNotifier(args.webhook)
+            ok, msg = notifier.notify_scan_complete(
+                results=[],
+                port_inventory=reporter_port.port_inventory,
+                target=raw
+            )
+            print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         sys.exit(0)
 
     # 漏洞检测
@@ -376,6 +412,15 @@ def main():
         if risk_sum.get("high", 0) > 0:
             print(f"[警告] 高危端口数量 > 0，请尽快按收敛建议整改！")
     print()
+    # ── 企微通知 ───────────────────────────────────────────────────
+    if args.notify:
+        notifier = WeChatNotifier(args.webhook)
+        ok, msg = notifier.notify_scan_complete(
+            results=reporter.results,
+            port_inventory=reporter.port_inventory,
+            target=", ".join(raw_targets)
+        )
+        print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
 
 
 if __name__ == "__main__":
