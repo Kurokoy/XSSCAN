@@ -320,6 +320,12 @@ def main():
 
     if not resolved_targets:
         print("\n[结束] 未发现任何开放端口\n")
+        if args.notify:
+            notifier = WeChatNotifier(args.webhook)
+            ok, msg = notifier.send_markdown(
+                f"## 🛡️ XSSCAN 扫描完成\n\n**目标**: `{raw_targets[0]}`\n\n> 未发现任何开放端口。"
+            )
+            print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         sys.exit(0)
 
     print(f"\n[信息] 共发现 {len(resolved_targets)} 个有效端点")
