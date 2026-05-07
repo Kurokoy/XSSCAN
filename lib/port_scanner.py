@@ -3,12 +3,14 @@
 """
 端口扫描器 & 协议检测
 对目标 IP/域名进行常见端口扫描，并检测 HTTP/HTTPS 协议
+支持全端口扫描模式（扫描所有常见端口，不限于中间件）
 """
 
 import socket
 import concurrent.futures
 import urllib.parse
 from lib.http_client import HttpClient
+from lib.service_db import COMMON_PORTS, get_port_info, build_port_report
 
 
 # 中间件默认端口表（模块名 -> 默认端口列表）
@@ -79,6 +81,83 @@ def _is_ssl(port):
     return port in (443, 8443, 9243, 15692, 15672)
 
 
+def scan_all_ports(host, timeout=3, port_scan_timeout=3, max_workers=100):
+    """
+    全端口扫描：扫描 COMMON_PORTS 中定义的所有常见端口
+    返回: list[int]  开放端口列表（已排序）
+    """
+    open_ports = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(scan_port, host, port, port_scan_timeout): port
+            for port in COMMON_PORTS
+        }
+        for future in concurrent.futures.as_completed(futures):
+            port = futures[future]
+            try:
+                if future.result():
+                    open_ports.append(port)
+            except Exception:
+                pass
+    return sorted(open_ports)
+
+
+def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers=50):
+    """
+    全端口扫描 + 协议检测
+    返回: (open_ports: list[int], schemes: dict[port -> scheme])
+    """
+    open_ports = scan_all_ports(host, timeout=timeout, port_scan_timeout=port_scan_timeout, max_workers=max_workers)
+
+    if not open_ports:
+        return [], {}
+
+    # 对 HTTP 常用端口检测协议（跳过非 HTTP 端口避免浪费）
+    http_candidate_ports = [p for p in open_ports if _is_http_port(p)]
+    schemes = {}
+
+    if not http_candidate_ports:
+        # 没有 HTTP 候选端口，直接返回空 scheme 字典
+        return open_ports, schemes
+
+    def try_scheme(port):
+        for scheme in ("https", "http"):
+            url = f"{scheme}://{host}:{port}"
+            try:
+                resp = HttpClient(timeout=timeout).get(url)
+                if resp and resp.status_code < 500:
+                    return port, scheme
+            except Exception:
+                pass
+        return port, "http"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(http_candidate_ports), 30)) as executor:
+        futures = {executor.submit(try_scheme, p): p for p in http_candidate_ports}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                port, scheme = future.result()
+                schemes[port] = scheme
+            except Exception:
+                pass
+
+    return open_ports, schemes
+
+
+def _is_http_port(port):
+    """判断端口是否可能跑 HTTP 服务（用于跳过不必要的协议探测）"""
+    # 常见非 HTTP 端口直接跳过
+    non_http = {
+        21, 22, 23, 25, 53, 67, 68, 69, 110, 111, 123, 135, 137, 138, 139,
+        143, 161, 162, 389, 445, 465, 514, 515, 636, 993, 995,
+        1433, 1434, 1521, 1723, 2049, 3306, 3389, 4369, 5432, 5666,
+        5672, 5673, 5900, 5901, 5984, 6379, 6380, 7000, 7199, 8000,
+        9200, 9300, 11211, 15672, 16379, 27017,
+    }
+    if port in non_http:
+        return False
+    return True
+
+
 def resolve_host(target):
     """
     将用户输入解析为 (host, scheme)
@@ -113,7 +192,7 @@ def scan_target(target, modules, timeout=3, port_scan_timeout=3):
     扫描单个目标的所有模块端口
     返回: list[dict]  每个元素 = {host, port, scheme, module, url}
     """
-    host, _ = resolve_target_full(target)
+    host, _, _ = resolve_target_full(target)
     if not host:
         return []
 
@@ -232,3 +311,46 @@ class PortScanner:
             timeout=self.timeout,
             port_scan_timeout=self.port_scan_timeout
         )
+
+    def full_scan(self, target):
+        """
+        全端口扫描模式：扫描所有常见端口，返回完整端口资产清单
+        返回: list[dict]  每个元素 = {host, port, scheme, service, risk_level, url, description, suggestion}
+        """
+        target = target.strip()
+        if not target:
+            return []
+
+        host, port, _ = resolve_target_full(target)
+        if port:
+            # 带端口的目标，直接返回单端口报告
+            schemes = {}
+            schemes[port] = detect_protocol(host, port, self.timeout)
+            open_ports = [port]
+        else:
+            print(f"[全端口扫描] {host}，共 {len(COMMON_PORTS)} 个端口 ...\n")
+            open_ports, schemes = scan_all_ports_with_scheme(
+                host,
+                timeout=self.timeout,
+                port_scan_timeout=self.port_scan_timeout,
+                max_workers=80,
+            )
+
+        if not open_ports:
+            return []
+
+        # 构建完整报告（包含服务指纹 + 收敛建议）
+        report = build_port_report(host, open_ports, schemes)
+
+        # 对 HTTP 服务补全 module 字段（中间件匹配）
+        middleware_port_to_module = {}
+        for mod, ports in MIDDLEWARE_PORTS.items():
+            for p in ports:
+                middleware_port_to_module[p] = mod
+
+        for entry in report:
+            p = entry["port"]
+            if p in middleware_port_to_module:
+                entry["module"] = middleware_port_to_module[p]
+
+        return report

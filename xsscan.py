@@ -49,7 +49,7 @@ AVAILABLE_MODULES = {
 def print_banner():
     for line in BANNER.split('\n'):
         print(f'\033[96m{line}\033[0m')
-    print(f'  \033[33mExposure Surface Scan — v1.0.0\033[0m\n')
+    print(f'  \033[33mExposure Surface Scan — v1.1.0\033[0m\n')
 
 
 def list_modules():
@@ -153,6 +153,8 @@ def main():
   %(prog)s -u http://1.2.3.4:8848               扫描指定端口目标
   %(prog)s -f targets.txt -m nacos,xxljob       批量扫描（自动端口扫描）
   %(prog)s -f targets.txt --port-only           仅做端口扫描，不做漏洞检测
+  %(prog)s -u 1.2.3.4 --full-scan               全端口扫描（~700个端口）输出资产清单+收敛建议
+  %(prog)s -u 1.2.3.4 --full-scan -o report.html --format html  生成 HTML 报告
   %(prog)s --list                               列出所有可用模块
 
 支持的模块: {' | '.join(AVAILABLE_MODULES.keys())}
@@ -191,6 +193,10 @@ def main():
     parser.add_argument(
         "--port-only", action="store_true",
         help="仅做端口扫描，不执行漏洞检测"
+    )
+    parser.add_argument(
+        "--full-scan", action="store_true",
+        help="全端口扫描模式：扫描所有常见端口（~600个），输出完整端口资产清单与收敛建议"
     )
     parser.add_argument(
         "--no-color", action="store_true",
@@ -234,7 +240,49 @@ def main():
     print(f"[信息] 原始目标数量: {len(raw_targets)}")
     print(f"[信息] 扫描模块: {', '.join(module_names)}")
 
-    # 端口扫描 + 协议检测
+    # ── 全端口扫描模式（优先，不走中间件端口扫描流程）─────────────────────
+    if args.full_scan:
+        print("\n========== 全端口扫描 ==========\n")
+        port_scanner = PortScanner(module_names, {
+            "timeout": args.timeout,
+            "port_scan_timeout": args.port_timeout,
+        })
+        reporter_port = Reporter()
+
+        for raw in raw_targets:
+            raw = raw.strip()
+            if not raw:
+                continue
+            host, port, _ = resolve_target_full(raw)
+            port_entries = port_scanner.full_scan(raw)
+            if port_entries:
+                print(f"[发现] {host} — {len(port_entries)} 个开放端口")
+                reporter_port.add_port_inventory(host, port_entries)
+                for entry in port_entries:
+                    risk_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(entry.get("risk_level", ""), "⚪")
+                    print(f"  {risk_emoji} {entry['port']:>6}  {entry['service']:<22}  {entry.get('risk_level', ''):<8}  {entry['url']}")
+            else:
+                print(f"[无开放端口] {host}")
+
+        if reporter_port.total_open_ports() > 0:
+            output_file = args.output
+            if not output_file:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_file = f"output/full_scan_{ts}.{args.format}"
+            os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else "output", exist_ok=True)
+            reporter_port.save(output_file, args.format)
+            print(f"\n[完成] 全端口资产清单已保存: {output_file}")
+            risk_sum = reporter_port.risk_summary()
+            high_risk = risk_sum.get("high", 0)
+            medium_risk = risk_sum.get("medium", 0)
+            print(f"[统计] 共 {reporter_port.total_open_ports()} 个开放端口 | 🔴高危 {high_risk} | 🟡中危 {medium_risk}")
+            if high_risk > 0:
+                print(f"[警告] 高危端口数量 > 0，请尽快按收敛建议整改！")
+        else:
+            print("\n[结束] 未发现任何开放端口\n")
+        sys.exit(0)
+
+    # ── 中间件端口扫描 + 协议检测 ──────────────────────────────────────
     print("\n========== 端口扫描 & 协议检测 ==========\n")
     resolved_targets = resolve_all_targets(
         raw_targets,
@@ -249,23 +297,34 @@ def main():
 
     print(f"\n[信息] 共发现 {len(resolved_targets)} 个有效端点")
 
-    # 仅端口扫描模式
+    # ── 仅端口扫描模式 ──────────────────────────────────────────────────
     if args.port_only:
+        port_scanner = PortScanner(module_names, {
+            "timeout": args.timeout,
+            "port_scan_timeout": args.port_timeout,
+        })
+        reporter_port = Reporter()
+
+        for raw in raw_targets:
+            raw = raw.strip()
+            if not raw:
+                continue
+            host, port, _ = resolve_target_full(raw)
+            port_entries = port_scanner.full_scan(raw)
+            if port_entries:
+                print(f"[发现] {host} — {len(port_entries)} 个开放端口")
+                reporter_port.add_port_inventory(host, port_entries)
+                for entry in port_entries:
+                    print(f"  {entry['port']:>6}  {entry['service']:<20}  {entry.get('risk_level', ''):<8}  {entry['url']}")
+            else:
+                print(f"[无开放端口] {host}")
+
         output_file = args.output
         if not output_file:
-            import datetime
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = f"output/port_scan_{ts}.json"
+            output_file = f"output/port_scan_{ts}.{args.format}"
         os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else "output", exist_ok=True)
-        import json
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump({
-                "tool": "XSSCAN",
-                "version": "1.0.0",
-                "timestamp": datetime.datetime.now().isoformat(),
-                "total": len(resolved_targets),
-                "results": resolved_targets,
-            }, f, ensure_ascii=False, indent=2)
+        reporter_port.save(output_file, args.format)
         print(f"\n[完成] 端口扫描结果已保存: {output_file}\n")
         sys.exit(0)
 
@@ -281,16 +340,42 @@ def main():
         findings = detector.scan(target)
         reporter.add_results(target, findings)
 
+    # 全端口资产清单（同步执行，附加到同一个报告）
+    print("\n========== 端口资产清单 ==========\n")
+    port_scanner = PortScanner(module_names, {
+        "timeout": args.timeout,
+        "port_scan_timeout": args.port_timeout,
+    })
+    for raw in raw_targets:
+        raw = raw.strip()
+        if not raw:
+            continue
+        host, _, _ = resolve_target_full(raw)
+        port_entries = port_scanner.full_scan(raw)
+        if port_entries:
+            reporter.add_port_inventory(host, port_entries)
+            print(f"[发现] {host} — {len(port_entries)} 个开放端口")
+            for entry in port_entries:
+                risk_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(entry.get("risk_level", ""), "⚪")
+                print(f"  {risk_emoji} {entry['port']:>6}  {entry['service']:<20}  {entry.get('risk_level', ''):<8}  {entry['url']}")
+        else:
+            print(f"[无开放端口] {host}")
+
     # 输出报告
     output_file = args.output
     if not output_file:
-        import datetime
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = f"output/scan_{ts}.{args.format}"
     os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else "output", exist_ok=True)
     reporter.save(output_file, args.format)
     print(f"\n[完成] 结果已保存: {output_file}")
-    print(f"[统计] 共发现 {reporter.total_findings()} 个暴露风险点\n")
+    print(f"[统计] 共发现 {reporter.total_findings()} 个暴露风险点")
+    if reporter.total_open_ports() > 0:
+        risk_sum = reporter.risk_summary()
+        print(f"[统计] 共发现 {reporter.total_open_ports()} 个开放端口 | 🔴高危 {risk_sum.get('high', 0)} | 🟡中危 {risk_sum.get('medium', 0)}")
+        if risk_sum.get("high", 0) > 0:
+            print(f"[警告] 高危端口数量 > 0，请尽快按收敛建议整改！")
+    print()
 
 
 if __name__ == "__main__":

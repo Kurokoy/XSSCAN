@@ -11,6 +11,8 @@
 
 在企业上云、敏捷开发的背景下，大量中间件（如 Nacos、XXL-Job、Spring Boot Admin 等）被默认部署并直接暴露在公网，而其中不少存在未鉴权、弱密码或敏感接口开放的问题。XSSCAN 正是为了解决这一痛点而设计——帮助用户在攻击者之前**先发现"灯下黑"的暴露资产**。
 
+> 🔴 **v1.1.0 新增**：全端口扫描模式 `--full-scan`，扫描 ~700 个常见端口，输出**完整端口资产清单 + 风险分级 + 收敛建议报告**。
+
 ## 🎯 核心能力
 
 - **自动端口扫描** — 无需提供端口，输入纯 IP 或域名即可自动探测常见中间件端口
@@ -18,6 +20,7 @@
 - **多目标支持** — 支持单个 IP/域名、URL 列表文件的批量扫描
 - **可扩展架构** — 插件式扫描模块，用户可快速新增中间件检测规则
 - **结果导出** — 支持 JSON / HTML / CSV 多格式报告输出
+- **全端口资产清单（v1.1.0）** — `--full-scan` 扫描 ~700 个常见端口，输出每个端口的服务名、风险等级与人工收敛建议
 
 ## 🛠️ 支持扫描的中间件（部分）
 
@@ -85,6 +88,19 @@ python xsscan.py -f targets.txt -m nacos
 python xsscan.py -f targets.txt --port-only
 ```
 
+### 全端口扫描 + 收敛建议报告（v1.1.0 新增）
+
+```bash
+# 全端口扫描（~700 个端口），生成 JSON 报告（含端口清单+收敛建议）
+python xsscan.py -u 1.2.3.4 --full-scan -o full_report.json
+
+# 全端口扫描，生成带风险分级的 HTML 报告（推荐）
+python xsscan.py -u 1.2.3.4 --full-scan -o full_report.html --format html
+
+# 批量全端口扫描
+python xsscan.py -f targets.txt --full-scan -o scan_results.html --format html
+```
+
 ### 输出报告
 
 ```bash
@@ -111,6 +127,7 @@ python xsscan.py --help
 --timeout          请求超时秒数（默认: 10）
 --port-timeout     端口扫描超时秒数（默认: 3）
 --port-only        仅做端口扫描，不执行漏洞检测
+--full-scan        全端口扫描模式，扫描 ~700 个常见端口，输出端口资产清单与收敛建议
 --no-color         禁用彩色输出
 ```
 
@@ -129,8 +146,9 @@ XSSCAN/
 │   ├── base.py           # 扫描器基类
 │   ├── http_client.py     # HTTP 客户端封装
 │   ├── detector.py        # 检测引擎（动态加载模块）
-│   ├── reporter.py         # 报告生成器
-│   └── port_scanner.py    # 端口扫描 & 协议检测
+│   ├── reporter.py         # 报告生成器（漏洞报告 + 端口资产清单）
+│   ├── service_db.py      # 服务指纹库（端口->服务->风险->收敛建议）
+│   └── port_scanner.py    # 端口扫描 & 协议检测（支持全端口模式）
 ├── output/                 # 扫描结果输出目录
 └── README.md
 ```
