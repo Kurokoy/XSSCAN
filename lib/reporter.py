@@ -19,8 +19,8 @@ class Reporter:
     def __init__(self):
         self.results = []          # 漏洞检测结果 list[dict]
         self.target_map = {}        # target -> list[dict]
-        self.port_inventory = []    # 端口资产清单 list[dict]
-        self.port_inventory_host = ""  # 端口扫描所属主机
+        self.port_inventory = []    # 端口资产清单 list[dict]（追加模式，支持多 IP）
+        self.port_inventory_hosts = set()  # 已记录的主机集合
 
     def add_results(self, target, findings):
         """记录漏洞扫描结果"""
@@ -29,12 +29,14 @@ class Reporter:
 
     def add_port_inventory(self, host, port_entries):
         """
-        记录全端口资产清单
+        记录全端口资产清单（追加模式，支持多 IP）
         host: IP 地址
         port_entries: list[dict] 每个元素 = {port, service, risk_level, url, description, suggestion, ...}
         """
-        self.port_inventory_host = host
-        self.port_inventory = port_entries
+        if host in self.port_inventory_hosts:
+            return  # 避免重复添加
+        self.port_inventory_hosts.add(host)
+        self.port_inventory.extend(port_entries)
 
     def total_findings(self):
         return len(self.results)
@@ -121,9 +123,9 @@ class Reporter:
 
             port_section = f"""
         <div class="section">
-            <h2>📡 端口资产清单 — {self.port_inventory_host}</h2>
+            <h2>📡 端口资产清单</h2>
             <div class="summary-row">
-                <span class="total">共发现 <strong>{len(self.port_inventory)}</strong> 个开放端口</span>
+                <span class="total">共扫描 <strong>{len(self.port_inventory_hosts)}</strong> 个主机，发现 <strong>{len(self.port_inventory)}</strong> 个开放端口</span>
                 {risk_badge}
             </div>
             <table>
