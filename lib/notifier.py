@@ -83,7 +83,7 @@ class WeChatNotifier:
 
     def format_scan_summary(self, results, port_inventory, target=None):
         """
-        将扫描结果格式化为企微 Markdown 消息
+        将扫描结果格式化为企微 Markdown 消息（表格形式）
         results: 漏洞检测结果列表
         port_inventory: 端口资产清单列表
         target: 扫描目标（可选）
@@ -92,74 +92,60 @@ class WeChatNotifier:
 
         # 标题
         lines.append("## 🛡️ XSSCAN 暴露面扫描报告")
+        lines.append(f"**扫描目标**: {target or '批量扫描'}")
         lines.append(f"**扫描时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        if target:
-            lines.append(f"**扫描目标**: `{target}`")
 
         # 风险统计
         vuln_count = len(results)
         port_count = len(port_inventory)
-        high_risk = sum(1 for e in port_inventory if e.get("risk_level") == "high")
-        medium_risk = sum(1 for e in port_inventory if e.get("risk_level") == "medium")
+        high_risk = [e for e in port_inventory if e.get("risk_level") == "high"]
+        medium_risk = [e for e in port_inventory if e.get("risk_level") == "medium"]
+        low_risk = [e for e in port_inventory if e.get("risk_level") == "low"]
 
         lines.append("")
         lines.append("### 📊 风险统计")
-        lines.append(f"- 漏洞检测结果: **{vuln_count}** 个")
-        lines.append(f"- 开放端口: **{port_count}** 个")
+        lines.append(f"| 统计项 | 数值 |")
+        lines.append(f"|--------|------|")
+        lines.append(f"| 漏洞检测结果 | **{vuln_count}** 个 |")
+        lines.append(f"| 开放端口总数 | **{port_count}** 个 |")
+        if high_risk:
+            lines.append(f"| 🔴 高危端口 | **{len(high_risk)}** 个 |")
+        if medium_risk:
+            lines.append(f"| 🟡 中危端口 | **{len(medium_risk)}** 个 |")
+        if low_risk:
+            lines.append(f"| 🟢 低危端口 | **{len(low_risk)}** 个 |")
 
-        if port_inventory:
-            risk_parts = []
-            if high_risk > 0:
-                risk_parts.append(f"🔴 高危 **{high_risk}** 个")
-            if medium_risk > 0:
-                risk_parts.append(f"🟡 中危 **{medium_risk}** 个")
-            if risk_parts:
-                lines.append(f"- 端口风险: {' | '.join(risk_parts)}")
-
-        # 高危端口清单
-        high_ports = [e for e in port_inventory if e.get("risk_level") == "high"]
-        if high_ports:
+        # 高危端口清单（表格）
+        if high_risk:
             lines.append("")
             lines.append("### 🔴 高危端口（需立即处置）")
-            for entry in high_ports[:10]:  # 最多显示10个
-                lines.append(
-                    f"- `{entry.get('port', '')}` "
-                    f"{entry.get('service', '')} "
-                    f"[{entry.get('url', '')}]({entry.get('url', '')})"
-                )
-            if len(high_ports) > 10:
-                lines.append(f"> ...还有 **{len(high_ports) - 10}** 个高危端口，详见完整报告")
+            lines.append("| IP | 端口 | 服务 | 风险描述 |")
+            lines.append("|--------|------|------|--------|")
+            for entry in high_risk:
+                service = entry.get('service', '')
+                desc = entry.get('description', '')[:30]
+                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {service} | {desc} |")
 
-        # 中危端口
-        medium_ports = [e for e in port_inventory if e.get("risk_level") == "medium"]
-        if medium_ports:
+        # 中危端口清单（表格）
+        if medium_risk:
             lines.append("")
-            lines.append("### 🟡 中危端口（建议尽快处置）")
-            for entry in medium_ports[:10]:
-                lines.append(
-                    f"- `{entry.get('port', '')}` "
-                    f"{entry.get('service', '')} "
-                    f"[{entry.get('url', '')}]({entry.get('url', '')})"
-                )
-            if len(medium_ports) > 10:
-                lines.append(f"> ...还有 **{len(medium_ports) - 10}** 个中危端口，详见完整报告")
+            lines.append("### 🟡 中危端口（建议处置）")
+            lines.append("| IP | 端口 | 服务 |")
+            lines.append("|--------|------|------|")
+            for entry in medium_risk:
+                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {entry.get('service', '')} |")
 
-        # 漏洞发现
-        if results:
+        # 低危端口
+        if low_risk:
             lines.append("")
-            lines.append("### 🔓 漏洞检测结果")
-            for r in results[:10]:
-                severity = r.get("severity", "info")
-                sev_emoji = {"critical": "🔴", "high": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "⚪")
-                lines.append(
-                    f"- {sev_emoji} **{r.get('title', '未知漏洞')}** "
-                    f"({r.get('scanner', '')}) @ `{r.get('url', r.get('target', ''))}`"
-                )
-            if len(results) > 10:
-                lines.append(f"> ...还有 **{len(results) - 10}** 个漏洞，详见完整报告")
+            lines.append("### 🟢 低危端口")
+            lines.append("| IP | 端口 | 服务 |")
+            lines.append("|--------|------|------|")
+            for entry in low_risk:
+                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {entry.get('service', '')} |")
 
         # 收敛建议
-        if high_risk > 0:
+        if high_risk:
             lines.append("")
             lines.append("> ⚠️ **请立即对上述高危端口进行收敛处置！**")
 
