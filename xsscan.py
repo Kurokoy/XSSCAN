@@ -138,7 +138,7 @@ def detect_scheme_quick(host, port, timeout=10):
         url = f"{scheme}://{host}:{port}"
         try:
             resp = HttpClient(timeout=timeout).get(url)
-            if resp and resp.status_code < 500:
+            if resp and resp.status_code == 200:
                 return scheme
         except Exception:
             pass
@@ -313,18 +313,20 @@ def main():
             # ── 企微通知 ───────────────────────────────────────────────────
             if args.notify:
                 notifier = WeChatNotifier(args.webhook)
+                target_label = f"共 {len(raw_targets)} 个目标" if len(raw_targets) > 1 else raw_targets[0]
                 ok, msg = notifier.notify_scan_complete(
                     results=[],
                     port_inventory=reporter_port.port_inventory,
-                    target=raw
+                    target=target_label
                 )
                 print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         else:
             print("\n[结束] 未发现任何开放端口\n")
             if args.notify:
                 notifier = WeChatNotifier(args.webhook)
+                target_label = f"共 {len(raw_targets)} 个目标" if len(raw_targets) > 1 else raw_targets[0]
                 ok, msg = notifier.send_markdown(
-                    f"## 🛡️ XSSCAN 扫描完成\n\n**目标**: `{raw}`\n\n> 未发现任何开放端口。"
+                    f"## 🛡️ XSSCAN 扫描完成\n\n**目标**: `{target_label}`\n\n> 未发现任何开放端口。"
                 )
                 print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         sys.exit(0)
@@ -342,8 +344,9 @@ def main():
         print("\n[结束] 未发现任何开放端口\n")
         if args.notify:
             notifier = WeChatNotifier(args.webhook)
+            target_label = f"共 {len(raw_targets)} 个目标" if len(raw_targets) > 1 else raw_targets[0]
             ok, msg = notifier.send_markdown(
-                f"## 🛡️ XSSCAN 扫描完成\n\n**目标**: `{raw_targets[0]}`\n\n> 未发现任何开放端口。"
+                f"## 🛡️ XSSCAN 扫描完成\n\n**目标**: `{target_label}`\n\n> 未发现任何开放端口。"
             )
             print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         sys.exit(0)
@@ -382,10 +385,11 @@ def main():
         # ── 企微通知 ───────────────────────────────────────────────────
         if args.notify:
             notifier = WeChatNotifier(args.webhook)
+            target_label = f"共 {len(raw_targets)} 个目标" if len(raw_targets) > 1 else raw_targets[0]
             ok, msg = notifier.notify_scan_complete(
                 results=[],
                 port_inventory=reporter_port.port_inventory,
-                target=raw
+                target=target_label
             )
             print(f"[通知] {'✅' if ok else '❌'} 企微机器人: {msg}")
         sys.exit(0)

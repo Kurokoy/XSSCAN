@@ -125,7 +125,7 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
             url = f"{scheme}://{host}:{port}"
             try:
                 resp = HttpClient(timeout=timeout).get(url)
-                if resp and resp.status_code < 500:
+                if resp and resp.status_code == 200:
                     return port, scheme
             except Exception:
                 pass
