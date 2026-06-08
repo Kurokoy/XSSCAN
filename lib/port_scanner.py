@@ -43,13 +43,19 @@ def scan_port(host, port, timeout=3):
 # 防火墙/WAF 拦截特征状态码（不作为有效服务响应）
 WAF_BLOCKED_CODES = {405, 501}
 
+# 服务不可用状态码（端口通但服务挂了）
+SERVICE_DOWN_CODES = {502, 503, 504}
+
+# 所有需要过滤的状态码
+FILTERED_CODES = WAF_BLOCKED_CODES | SERVICE_DOWN_CODES
+
 
 def _is_valid_response(resp):
-    """判断 HTTP 响应是否为有效服务响应（排除 WAF/防火墙拦截）"""
+    """判断 HTTP 响应是否为有效服务响应（排除 WAF/防火墙拦截和服务不可用）"""
     if resp is None:
         return False
     try:
-        return resp.status_code < 500 and resp.status_code not in WAF_BLOCKED_CODES
+        return resp.status_code < 500 and resp.status_code not in FILTERED_CODES
     except Exception:
         return False
 
@@ -136,11 +142,13 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
 
     waf_blocked_ports = set()
     http_unreachable_ports = set()
+    service_down_ports = set()
 
     def try_scheme(port):
         """
         尝试 HTTP/HTTPS 探测，返回 (port, scheme, status)
-        status: 'ok' = 有效响应, 'waf' = WAF 拦截(405/501), 'unreachable' = HTTP 不可达
+        status: 'ok' = 有效响应, 'waf' = WAF 拦截(405/501), 
+                'down' = 服务不可用(502/503/504), 'unreachable' = HTTP 不可达
         """
         for scheme in ("https", "http"):
             url = f"{scheme}://{host}:{port}"
@@ -150,6 +158,8 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
                     # 拿到了 HTTP 响应（任何状态码）
                     if resp.status_code in WAF_BLOCKED_CODES:
                         return port, scheme, "waf"
+                    if resp.status_code in SERVICE_DOWN_CODES:
+                        return port, scheme, "down"
                     return port, scheme, "ok"
                 # resp is None = 请求失败（超时/连接拒绝/DNS错误等）
             except Exception:
@@ -164,6 +174,8 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
                 port, scheme, status = future.result()
                 if status == "waf":
                     waf_blocked_ports.add(port)
+                elif status == "down":
+                    service_down_ports.add(port)
                 elif status == "unreachable":
                     http_unreachable_ports.add(port)
                 else:
@@ -175,6 +187,11 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
     if waf_blocked_ports:
         print(f"[过滤] WAF 拦截端口 (405/501): {sorted(waf_blocked_ports)}")
         open_ports = [p for p in open_ports if p not in waf_blocked_ports]
+
+    # 剔除服务不可用的端口（502/503/504）
+    if service_down_ports:
+        print(f"[过滤] 服务不可用端口 (502/503/504): {sorted(service_down_ports)}")
+        open_ports = [p for p in open_ports if p not in service_down_ports]
 
     # 剔除 TCP 开放但 HTTP 不可达的端口（端口通但无 HTTP 服务）
     if http_unreachable_ports:
