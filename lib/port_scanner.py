@@ -40,6 +40,20 @@ def scan_port(host, port, timeout=3):
         return False
 
 
+# 防火墙/WAF 拦截特征状态码（不作为有效服务响应）
+WAF_BLOCKED_CODES = {405, 501}
+
+
+def _is_valid_response(resp):
+    """判断 HTTP 响应是否为有效服务响应（排除 WAF/防火墙拦截）"""
+    if resp is None:
+        return False
+    try:
+        return resp.status_code < 500 and resp.status_code not in WAF_BLOCKED_CODES
+    except Exception:
+        return False
+
+
 def detect_protocol(host, port, timeout=5):
     """
     检测协议：同时发 HTTP 和 HTTPS 请求，
@@ -53,7 +67,7 @@ def detect_protocol(host, port, timeout=5):
     def try_protocol(scheme):
         url = f"{scheme}://{host}:{port}"
         resp = http_client.get(url)
-        if resp and resp.status_code < 500:
+        if _is_valid_response(resp):
             return scheme
         return None
 
@@ -120,25 +134,37 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
         # 没有 HTTP 候选端口，直接返回空 scheme 字典
         return open_ports, schemes
 
+    waf_blocked_ports = set()
+
     def try_scheme(port):
         for scheme in ("https", "http"):
             url = f"{scheme}://{host}:{port}"
             try:
                 resp = HttpClient(timeout=timeout).get(url)
                 if resp and resp.status_code == 200:
-                    return port, scheme
+                    return port, scheme, False
+                if resp and resp.status_code in WAF_BLOCKED_CODES:
+                    return port, scheme, True
             except Exception:
                 pass
-        return port, "http"
+        return port, "http", False
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(http_candidate_ports), 30)) as executor:
         futures = {executor.submit(try_scheme, p): p for p in http_candidate_ports}
         for future in concurrent.futures.as_completed(futures):
             try:
-                port, scheme = future.result()
-                schemes[port] = scheme
+                port, scheme, blocked = future.result()
+                if blocked:
+                    waf_blocked_ports.add(port)
+                else:
+                    schemes[port] = scheme
             except Exception:
                 pass
+
+    # 剔除 WAF/防火墙拦截的端口
+    if waf_blocked_ports:
+        print(f"[过滤] WAF 拦截端口 (405): {sorted(waf_blocked_ports)}")
+        open_ports = [p for p in open_ports if p not in waf_blocked_ports]
 
     return open_ports, schemes
 
@@ -337,6 +363,7 @@ class PortScanner:
             )
 
         if not open_ports:
+            print(f"[无开放端口] {host}\n")
             return []
 
         # 构建完整报告（包含服务指纹 + 收敛建议）
