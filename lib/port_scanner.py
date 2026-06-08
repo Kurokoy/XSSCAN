@@ -135,27 +135,37 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
         return open_ports, schemes
 
     waf_blocked_ports = set()
+    http_unreachable_ports = set()
 
     def try_scheme(port):
+        """
+        尝试 HTTP/HTTPS 探测，返回 (port, scheme, status)
+        status: 'ok' = 有效响应, 'waf' = WAF 拦截(405/501), 'unreachable' = HTTP 不可达
+        """
         for scheme in ("https", "http"):
             url = f"{scheme}://{host}:{port}"
             try:
                 resp = HttpClient(timeout=timeout).get(url)
-                if resp and resp.status_code == 200:
-                    return port, scheme, False
-                if resp and resp.status_code in WAF_BLOCKED_CODES:
-                    return port, scheme, True
+                if resp is not None:
+                    # 拿到了 HTTP 响应（任何状态码）
+                    if resp.status_code in WAF_BLOCKED_CODES:
+                        return port, scheme, "waf"
+                    return port, scheme, "ok"
+                # resp is None = 请求失败（超时/连接拒绝/DNS错误等）
             except Exception:
                 pass
-        return port, "http", False
+        # 两种协议都无响应 = TCP 开放但 HTTP 不可达
+        return port, "http", "unreachable"
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(http_candidate_ports), 30)) as executor:
         futures = {executor.submit(try_scheme, p): p for p in http_candidate_ports}
         for future in concurrent.futures.as_completed(futures):
             try:
-                port, scheme, blocked = future.result()
-                if blocked:
+                port, scheme, status = future.result()
+                if status == "waf":
                     waf_blocked_ports.add(port)
+                elif status == "unreachable":
+                    http_unreachable_ports.add(port)
                 else:
                     schemes[port] = scheme
             except Exception:
@@ -163,8 +173,13 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
 
     # 剔除 WAF/防火墙拦截的端口
     if waf_blocked_ports:
-        print(f"[过滤] WAF 拦截端口 (405): {sorted(waf_blocked_ports)}")
+        print(f"[过滤] WAF 拦截端口 (405/501): {sorted(waf_blocked_ports)}")
         open_ports = [p for p in open_ports if p not in waf_blocked_ports]
+
+    # 剔除 TCP 开放但 HTTP 不可达的端口（端口通但无 HTTP 服务）
+    if http_unreachable_ports:
+        print(f"[过滤] HTTP 不可达端口 (TCP 通但无 HTTP 响应): {sorted(http_unreachable_ports)}")
+        open_ports = [p for p in open_ports if p not in http_unreachable_ports]
 
     return open_ports, schemes
 
