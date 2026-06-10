@@ -55,11 +55,11 @@ class HttpClient:
 
     @staticmethod
     def is_alive(response):
-        """判断响应是否有效（非空、非错误协议、非 WAF 拦截、非服务不可用）"""
+        """判断响应是否有效（非空、非 WAF 拦截、非服务不可用）"""
         if response is None:
             return False
         try:
-            return response.status_code < 500 and response.status_code not in (405, 501, 502, 503, 504)
+            return response.status_code < 500 and response.status_code not in (403, 405, 501, 502, 503, 504)
         except Exception:
             return False
 
