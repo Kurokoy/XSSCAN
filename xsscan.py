@@ -132,13 +132,15 @@ def resolve_all_targets(raw_targets, modules, port_timeout=3, scan_timeout=10):
 
 
 def detect_scheme_quick(host, port, timeout=10):
-    """快速检测 HTTP/HTTPS（先试 https）"""
-    import urllib.parse
+    """快速检测 HTTP/HTTPS（先试 https）
+    只要服务器返回任何 HTTP 响应（包括 4xx/5xx），就说明该协议可用。
+    仅排除连接失败/超时（resp=None）的情况。
+    """
     for scheme in ("https", "http"):
         url = f"{scheme}://{host}:{port}"
         try:
             resp = HttpClient(timeout=timeout).get(url)
-            if resp and resp.status_code == 200:
+            if resp is not None:
                 return scheme
         except Exception:
             pass

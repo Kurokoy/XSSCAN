@@ -100,10 +100,13 @@ class Reporter:
                     "low": "risk-low",
                     "info": "risk-info",
                 }.get(risk, "risk-info")
+                sc = entry.get("status_code")
+                sc_display = str(sc) if sc is not None else "-"
                 port_rows += f"""
                 <tr>
                     <td>{entry.get('port', '')}</td>
                     <td>{entry.get('service', '')}</td>
+                    <td>{sc_display}</td>
                     <td>{entry.get('url', '')}</td>
                     <td><span class="{color_cls}">{risk.upper()}</span></td>
                     <td>{entry.get('description', '')}</td>
@@ -131,7 +134,7 @@ class Reporter:
             <table>
             <thead>
                 <tr>
-                    <th>端口</th><th>服务</th><th>URL</th><th>风险等级</th><th>服务说明</th><th>收敛建议</th>
+                    <th>端口</th><th>服务</th><th>状态码</th><th>URL</th><th>风险等级</th><th>服务说明</th><th>收敛建议</th>
                 </tr>
             </thead>
             <tbody>{port_rows}</tbody>
@@ -216,7 +219,7 @@ p{{color:#8b949e;margin:8px 0}}
 
     def _save_csv(self, path):
         if self.port_inventory:
-            fieldnames = ["host", "port", "service", "risk_level", "url", "description", "suggestion"]
+            fieldnames = ["host", "port", "service", "status_code", "risk_level", "url", "description", "suggestion"]
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()

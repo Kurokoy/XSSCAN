@@ -41,7 +41,7 @@ def scan_port(host, port, timeout=3):
 
 
 # 防火墙/WAF 拦截特征状态码（不作为有效服务响应）
-WAF_BLOCKED_CODES = {405, 501}
+WAF_BLOCKED_CODES = {403, 405, 501}
 
 # 服务不可用状态码（端口通但服务挂了）
 SERVICE_DOWN_CODES = {502, 503, 504}
@@ -63,7 +63,7 @@ def _is_valid_response(resp):
 def detect_protocol(host, port, timeout=5):
     """
     检测协议：同时发 HTTP 和 HTTPS 请求，
-    返回先拿到有效响应的那个（http / https / None）
+    返回先拿到有效响应的那个（(scheme, status_code) / (scheme, None)）
     """
     http_client = HttpClient(timeout=timeout)
 
@@ -74,8 +74,8 @@ def detect_protocol(host, port, timeout=5):
         url = f"{scheme}://{host}:{port}"
         resp = http_client.get(url)
         if _is_valid_response(resp):
-            return scheme
-        return None
+            return scheme, resp.status_code
+        return None, None
 
     # 并发探测
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -86,14 +86,14 @@ def detect_protocol(host, port, timeout=5):
             [http_future, https_future], timeout=timeout + 1
         ):
             try:
-                result = future.result()
-                if result:
-                    return result
+                scheme, status_code = future.result()
+                if scheme:
+                    return scheme, status_code
             except Exception:
                 pass
 
     # 都失败了，按默认 SSL 端口判断
-    return "https" if is_https else "http"
+    return ("https" if is_https else "http"), None
 
 
 def _is_ssl(port):
@@ -130,15 +130,16 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
     open_ports = scan_all_ports(host, timeout=timeout, port_scan_timeout=port_scan_timeout, max_workers=max_workers)
 
     if not open_ports:
-        return [], {}
+        return [], {}, {}
 
     # 对 HTTP 常用端口检测协议（跳过非 HTTP 端口避免浪费）
     http_candidate_ports = [p for p in open_ports if _is_http_port(p)]
     schemes = {}
+    status_codes = {}
 
     if not http_candidate_ports:
-        # 没有 HTTP 候选端口，直接返回空 scheme 字典
-        return open_ports, schemes
+        # 没有 HTTP 候选端口，直接返回空字典
+        return open_ports, schemes, status_codes
 
     waf_blocked_ports = set()
     http_unreachable_ports = set()
@@ -146,9 +147,10 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
 
     def try_scheme(port):
         """
-        尝试 HTTP/HTTPS 探测，返回 (port, scheme, status)
-        status: 'ok' = 有效响应, 'waf' = WAF 拦截(405/501), 
+        尝试 HTTP/HTTPS 探测，返回 (port, scheme, status, http_status_code)
+        status: 'ok' = 有效响应, 'waf' = WAF 拦截(403/405/501),
                 'down' = 服务不可用(502/503/504), 'unreachable' = HTTP 不可达
+        http_status_code: 实际 HTTP 状态码（仅 'ok' 时有值）
         """
         for scheme in ("https", "http"):
             url = f"{scheme}://{host}:{port}"
@@ -156,22 +158,25 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
                 resp = HttpClient(timeout=timeout).get(url)
                 if resp is not None:
                     # 拿到了 HTTP 响应（任何状态码）
-                    if resp.status_code in WAF_BLOCKED_CODES:
-                        return port, scheme, "waf"
-                    if resp.status_code in SERVICE_DOWN_CODES:
-                        return port, scheme, "down"
-                    return port, scheme, "ok"
+                    sc = resp.status_code
+                    if sc in WAF_BLOCKED_CODES:
+                        return port, scheme, "waf", sc
+                    if sc in SERVICE_DOWN_CODES:
+                        return port, scheme, "down", sc
+                    return port, scheme, "ok", sc
                 # resp is None = 请求失败（超时/连接拒绝/DNS错误等）
             except Exception:
                 pass
         # 两种协议都无响应 = TCP 开放但 HTTP 不可达
-        return port, "http", "unreachable"
+        return port, "http", "unreachable", None
+
+    status_codes = {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(http_candidate_ports), 30)) as executor:
         futures = {executor.submit(try_scheme, p): p for p in http_candidate_ports}
         for future in concurrent.futures.as_completed(futures):
             try:
-                port, scheme, status = future.result()
+                port, scheme, status, http_code = future.result()
                 if status == "waf":
                     waf_blocked_ports.add(port)
                 elif status == "down":
@@ -180,12 +185,14 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
                     http_unreachable_ports.add(port)
                 else:
                     schemes[port] = scheme
+                    if http_code is not None:
+                        status_codes[port] = http_code
             except Exception:
                 pass
 
     # 剔除 WAF/防火墙拦截的端口
     if waf_blocked_ports:
-        print(f"[过滤] WAF 拦截端口 (405/501): {sorted(waf_blocked_ports)}")
+        print(f"[过滤] WAF 拦截端口 (403/405/501): {sorted(waf_blocked_ports)}")
         open_ports = [p for p in open_ports if p not in waf_blocked_ports]
 
     # 剔除服务不可用的端口（502/503/504）
@@ -198,7 +205,7 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
         print(f"[过滤] HTTP 不可达端口 (TCP 通但无 HTTP 响应): {sorted(http_unreachable_ports)}")
         open_ports = [p for p in open_ports if p not in http_unreachable_ports]
 
-    return open_ports, schemes
+    return open_ports, schemes, status_codes
 
 
 def _is_http_port(port):
@@ -280,7 +287,7 @@ def scan_target(target, modules, timeout=3, port_scan_timeout=3):
 
     # 对每个开放端口检测协议
     for port in sorted(open_ports):
-        scheme = detect_protocol(host, port, timeout)
+        scheme, status_code = detect_protocol(host, port, timeout)
         for mod in modules:
             if port in MIDDLEWARE_PORTS.get(mod, []):
                 url = f"{scheme}://{host}:{port}"
@@ -288,6 +295,7 @@ def scan_target(target, modules, timeout=3, port_scan_timeout=3):
                     "host": host,
                     "port": port,
                     "scheme": scheme,
+                    "status_code": status_code,
                     "module": mod,
                     "url": url,
                     "target": f"{scheme}://{host}:{port}",
@@ -352,11 +360,16 @@ class PortScanner:
 
         # 情况1: 带端口的完整 URL -> 跳过端口扫描
         if port:
-            scheme = scheme or detect_protocol(host, port, self.timeout)
+            status_code = None
+            if scheme:
+                pass  # 用户已指定协议
+            else:
+                scheme, status_code = detect_protocol(host, port, self.timeout)
             result = {
                 "host": host,
                 "port": port,
                 "scheme": scheme,
+                "status_code": status_code,
                 "module": None,  # 由 detector 层匹配模块
                 "url": f"{scheme}://{host}:{port}",
                 "target": f"{scheme}://{host}:{port}",
@@ -382,12 +395,13 @@ class PortScanner:
         host, port, _ = resolve_target_full(target)
         if port:
             # 带端口的目标，直接返回单端口报告
-            schemes = {}
-            schemes[port] = detect_protocol(host, port, self.timeout)
+            scheme, status_code = detect_protocol(host, port, self.timeout)
+            schemes = {port: scheme}
+            status_codes = {port: status_code} if status_code else {}
             open_ports = [port]
         else:
             print(f"[全端口扫描] {host}，共 {len(COMMON_PORTS)} 个端口 ...\n")
-            open_ports, schemes = scan_all_ports_with_scheme(
+            open_ports, schemes, status_codes = scan_all_ports_with_scheme(
                 host,
                 timeout=self.timeout,
                 port_scan_timeout=self.port_scan_timeout,
@@ -399,7 +413,7 @@ class PortScanner:
             return []
 
         # 构建完整报告（包含服务指纹 + 收敛建议）
-        report = build_port_report(host, open_ports, schemes)
+        report = build_port_report(host, open_ports, schemes, status_codes)
 
         # 对 HTTP 服务补全 module 字段（中间件匹配）
         middleware_port_to_module = {}

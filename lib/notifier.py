@@ -119,30 +119,36 @@ class WeChatNotifier:
         if high_risk:
             lines.append("")
             lines.append("### 🔴 高危端口（需立即处置）")
-            lines.append("| IP | 端口 | 服务 | 风险描述 |")
-            lines.append("|--------|------|------|--------|")
+            lines.append("| IP | 端口 | 服务 | 状态码 | 风险描述 |")
+            lines.append("|--------|------|------|--------|--------|")
             for entry in high_risk:
                 service = entry.get('service', '')
                 desc = entry.get('description', '')[:30]
-                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {service} | {desc} |")
+                sc = entry.get('status_code')
+                sc_str = str(sc) if sc is not None else "-"
+                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {service} | {sc_str} | {desc} |")
 
         # 中危端口清单（表格）
         if medium_risk:
             lines.append("")
             lines.append("### 🟡 中危端口（建议处置）")
-            lines.append("| IP | 端口 | 服务 |")
-            lines.append("|--------|------|------|")
+            lines.append("| IP | 端口 | 服务 | 状态码 |")
+            lines.append("|--------|------|------|--------|")
             for entry in medium_risk:
-                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {entry.get('service', '')} |")
+                sc = entry.get('status_code')
+                sc_str = str(sc) if sc is not None else "-"
+                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {entry.get('service', '')} | {sc_str} |")
 
         # 低危端口
         if low_risk:
             lines.append("")
             lines.append("### 🟢 低危端口")
-            lines.append("| IP | 端口 | 服务 |")
-            lines.append("|--------|------|------|")
+            lines.append("| IP | 端口 | 服务 | 状态码 |")
+            lines.append("|--------|------|------|--------|")
             for entry in low_risk:
-                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {entry.get('service', '')} |")
+                sc = entry.get('status_code')
+                sc_str = str(sc) if sc is not None else "-"
+                lines.append(f"| `{entry.get('host', '')}` | `{entry.get('port', '')}` | {entry.get('service', '')} | {sc_str} |")
 
         # 收敛建议
         if high_risk:

@@ -461,15 +461,17 @@ def get_convergence_suggestion(port):
     return "该端口为未知服务。建议使用 nmap 或浏览器确认服务身份；如非业务必要，建议通过防火墙关闭该端口或限制来源 IP。"
 
 
-def build_port_report(host, open_ports, schemes=None):
+def build_port_report(host, open_ports, schemes=None, status_codes=None):
     """
     为一组开放端口生成完整的资产报告
     host: IP 地址
     open_ports: sorted list of int
     schemes: dict {port: scheme} 可选
+    status_codes: dict {port: int} 可选，HTTP 状态码
     返回: list[dict]
     """
     schemes = schemes or {}
+    status_codes = status_codes or {}
     report = []
     for port in sorted(open_ports):
         info = get_port_info(port)
@@ -484,6 +486,7 @@ def build_port_report(host, open_ports, schemes=None):
             "port": port,
             "service": service,
             "risk_level": risk,
+            "status_code": status_codes.get(port),
             "url": url,
             "description": info["description"] if info else "未知服务，建议人工确认",
             "suggestion": suggestion,
