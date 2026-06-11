@@ -15,6 +15,7 @@ class HttpClient:
         self.timeout = timeout
         self.follow_redirects = follow_redirects
         self.session = requests.Session()
+        self.session.trust_env = False  # 不读取系统代理，避免 Windows 代理导致超时
         default_ua = "Mozilla/5.0 (compatible; XSSCAN/1.0; Linux) AppleWebKit/537.36"
         self.session.headers.update({
             "User-Agent": user_agent or default_ua,
@@ -55,11 +56,11 @@ class HttpClient:
 
     @staticmethod
     def is_alive(response):
-        """判断响应是否有效（非空、非 WAF 拦截、非服务不可用）"""
+        """判断响应是否有效（仅接受 2xx/3xx，>= 400 全部过滤）"""
         if response is None:
             return False
         try:
-            return response.status_code < 500 and response.status_code not in (403, 405, 501, 502, 503, 504)
+            return response.status_code < 400
         except Exception:
             return False
 
