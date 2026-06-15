@@ -40,22 +40,12 @@ def scan_port(host, port, timeout=3):
         return False
 
 
-# 防火墙/WAF 拦截特征状态码（不作为有效服务响应）
-WAF_BLOCKED_CODES = {403, 405, 501}
-
-# 服务不可用状态码（端口通但服务挂了）
-SERVICE_DOWN_CODES = {502, 503, 504}
-
-# 所有需要过滤的状态码
-FILTERED_CODES = WAF_BLOCKED_CODES | SERVICE_DOWN_CODES
-
-
 def _is_valid_response(resp):
-    """判断 HTTP 响应是否为有效服务响应（排除 WAF/防火墙拦截和服务不可用）"""
+    """判断 HTTP 响应是否为有效服务响应（仅接受 2xx/3xx，>= 400 全部过滤）"""
     if resp is None:
         return False
     try:
-        return resp.status_code < 500 and resp.status_code not in FILTERED_CODES
+        return resp.status_code < 400
     except Exception:
         return False
 
@@ -141,33 +131,26 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
         # 没有 HTTP 候选端口，直接返回空字典
         return open_ports, schemes, status_codes
 
-    waf_blocked_ports = set()
+    filtered_ports = set()          # 状态码 >= 400 的端口
+    filtered_details = {}           # port -> status_code（用于日志）
     http_unreachable_ports = set()
-    service_down_ports = set()
 
     def try_scheme(port):
         """
         尝试 HTTP/HTTPS 探测，返回 (port, scheme, status, http_status_code)
-        status: 'ok' = 有效响应, 'waf' = WAF 拦截(403/405/501),
-                'down' = 服务不可用(502/503/504), 'unreachable' = HTTP 不可达
-        http_status_code: 实际 HTTP 状态码（仅 'ok' 时有值）
+        status: 'ok' = 有效响应(2xx/3xx), 'filtered' = 状态码>=400, 'unreachable' = HTTP 不可达
         """
         for scheme in ("https", "http"):
             url = f"{scheme}://{host}:{port}"
             try:
                 resp = HttpClient(timeout=timeout).get(url)
                 if resp is not None:
-                    # 拿到了 HTTP 响应（任何状态码）
                     sc = resp.status_code
-                    if sc in WAF_BLOCKED_CODES:
-                        return port, scheme, "waf", sc
-                    if sc in SERVICE_DOWN_CODES:
-                        return port, scheme, "down", sc
+                    if sc >= 400:
+                        return port, scheme, "filtered", sc
                     return port, scheme, "ok", sc
-                # resp is None = 请求失败（超时/连接拒绝/DNS错误等）
             except Exception:
                 pass
-        # 两种协议都无响应 = TCP 开放但 HTTP 不可达
         return port, "http", "unreachable", None
 
     status_codes = {}
@@ -177,10 +160,9 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
         for future in concurrent.futures.as_completed(futures):
             try:
                 port, scheme, status, http_code = future.result()
-                if status == "waf":
-                    waf_blocked_ports.add(port)
-                elif status == "down":
-                    service_down_ports.add(port)
+                if status == "filtered":
+                    filtered_ports.add(port)
+                    filtered_details[port] = http_code
                 elif status == "unreachable":
                     http_unreachable_ports.add(port)
                 else:
@@ -190,15 +172,11 @@ def scan_all_ports_with_scheme(host, timeout=5, port_scan_timeout=3, max_workers
             except Exception:
                 pass
 
-    # 剔除 WAF/防火墙拦截的端口
-    if waf_blocked_ports:
-        print(f"[过滤] WAF 拦截端口 (403/405/501): {sorted(waf_blocked_ports)}")
-        open_ports = [p for p in open_ports if p not in waf_blocked_ports]
-
-    # 剔除服务不可用的端口（502/503/504）
-    if service_down_ports:
-        print(f"[过滤] 服务不可用端口 (502/503/504): {sorted(service_down_ports)}")
-        open_ports = [p for p in open_ports if p not in service_down_ports]
+    # 剔除状态码 >= 400 的端口
+    if filtered_ports:
+        codes_summary = ", ".join(f"{p}={filtered_details[p]}" for p in sorted(filtered_ports))
+        print(f"[过滤] 状态码>=400 的端口: {{{codes_summary}}}")
+        open_ports = [p for p in open_ports if p not in filtered_ports]
 
     # 剔除 TCP 开放但 HTTP 不可达的端口（端口通但无 HTTP 服务）
     if http_unreachable_ports:
